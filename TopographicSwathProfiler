@@ -1,0 +1,1176 @@
+//// Updated 2023/10/06
+
+// Initiallize map
+var proj = ee.Projection('EPSG:4326');
+var proj2 = ee.Projection('EPSG:32644');
+var map = Map.setOptions('Satellite').setCenter(-10, 10, 3);
+var roi = ee.Geometry(Map.getBounds(1));
+var text = require('users/gena/packages:text');// Important tool for Labels Thanks Gena!!!
+
+///// Import Rasters Data /////
+var bathem = ee.Image('NOAA/NGDC/ETOPO1').select('bedrock');
+var Alos30 = ee.Image('JAXA/ALOS/AW3D30/V2_2').select('AVE_DSM');
+var Netherland5 = ee.Image('AHN/AHN2_05M_INT').select('elevation');
+var Australia5 = ee.Image('AU/GA/DEM_1SEC/v10/DEM-S').select('elevation');
+var SRTM30 = ee.Image('USGS/SRTMGL1_003').select('elevation');
+var Can23 = ee.ImageCollection('NRCan/CDEM').select('elevation');
+var Arctic2 = ee.Image('UMN/PGC/ArcticDEM/V3/2m_mosaic').select('elevation');
+var USGS1 = ee.ImageCollection('USGS/3DEP/1m').select('elevation');
+var USGS10 = ee.Image('USGS/3DEP/10m').select('elevation');
+
+var latLonImg = ee.Image.pixelLonLat();
+
+//// Combine ALOS and NOAA to make global ee.Image
+var mask1 = bathem.lt(0);
+var mask2 = bathem.gt(0);
+var bathem1 = bathem.mask(mask1);
+var comb = Alos30.blend(bathem1).rename('elevation');
+  
+var ElevUse = comb.select('elevation');
+DEMquery = ElevUse;
+
+
+
+var basemap = {'basemap': [
+        {featureType: 'water',stylers: [{ color: '#202020' }]},
+        {featureType: 'landscape', stylers: [{ color: '#303030' }]},
+        {featureType: 'administrative', stylers: [{ visibility: 'off' }]},
+        {featureType: 'road', stylers: [{ visibility: 'off' }]},
+        {featureType: 'poi', stylers: [{ visibility: 'off' }]},
+        {featureType: 'transit', stylers: [{ visibility: 'off' }]}]};
+        
+//// Build UI Panel ///////
+var panelCoordSave = ui.Panel({widgets: [],style: {width: '0', height: '100px', backgroundColor: '00000000', position: 'top-center'}});
+var panelCoordSave2 = ui.Panel({widgets: [],style: {width: '0',height: '100px', backgroundColor: '00000000', position: 'top-center'}});
+
+function colorBar(palette) {return ui.Thumbnail({image: ee.Image.pixelLonLat().select(0), 
+          params: {bbox: [0, 0, 1, 0.1], 
+          dimensions: '300x15', 
+          format: 'png', 
+          palette: palette},
+          style: {margin: '3px 10px 3px 10px', 
+          backgroundColor: '00000000'},});
+          }
+
+/// Stored Visibility Variables ///////
+{
+var gamma = ['202020','white'];
+var bar = {palette: ['000000','0231b6','00a0ff','99ccff','015c00', 'f8ff6b', 'ceb03f', '923f00', 'ffffff']};
+var startColor = '#E84A8E';
+var endColor = '7FB5FF';
+var lineColor = 'white';
+var empty = ee.Image().byte();
+var backgroundclr = '202020';
+var titleclr = '7FB5FF';///blue
+var txtclr = 'DDDDDD';///grey
+var btnclr = '000000';///black
+var resultclr = 'E63E6D';///red    
+var txtsize = '14px';
+var resultsize = '14px';
+var boxclr = 'E63E6D'; ////white
+var sm_txt_clr = txtclr;
+var ResultStyle = {margin: '0 10px 10px 10px', fontSize: resultsize, color: txtclr, backgroundColor: backgroundclr};
+var LonLatStyle = {margin: '8px 0px 0px -1px', fontSize: txtsize, color: txtclr, backgroundColor: backgroundclr};
+}
+
+//// Build Map Layer Containers (necesserry for updating map layers) ////
+var contourLayer = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var hs = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var ExtentLayer = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var hillshadeLocal = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var elevationLocal = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var contourLocal = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var DEMExtent = ui.Map.Layer(empty, {}, 'Extent of Selected DEM', false);
+var lineLayer = ui.Map.Layer(empty, {color: lineColor}, 'Placeholder', false);
+var boxLayer = ui.Map.Layer(empty, {color: boxclr}, 'Placeholder', false);
+
+////////////////////////////////////
+//////// Global Variables //////////
+/// Initiallize global utility variables ///////
+//var RL = ee.Number(0);
+//var RH = ee.Number(9000);
+var CI = ee.Number(50);
+var pointcount = 0;
+var multiPointCoordinates;
+var ValidData = [];
+var NewClip = ee.Image();
+var DEMbounds = ee.Image();
+var DEMquery = ee.Image();
+var eventCount = 0;
+var plot2Array = ee.Array([]);
+var plotLabels = ee.Array([]);
+var plot1 =  [];
+var plot2 = [];
+var SwathObj = [];
+var distSort = [];
+var elevSort = [];
+var sampleInterval = [];
+var Geod = []; ///G
+var c = [];  ///g
+var line = [];///g
+var swathBox = [];
+var sw_start_line = []; ///Perp lines
+var sw_end_line = [];   ///Perp lines
+var parallel_cnt = [];
+var perp_cnt = [];
+var sam_cnt = [];
+
+//// Build string containers for use in panels (must be global) ///
+var errorLabel = ui.Label({value: '',  
+        style: {margin: '0px 0px 5px 0px', color: 'E63E6D', fontSize: txtsize,
+        whiteSpace: 'wrap', backgroundColor: backgroundclr}});
+var coordLabel = ui.Label({value: '',
+        style: {margin: '0px 0 0 10px', height: '80px', width: '330px',
+        whiteSpace: 'pre',color: backgroundclr, backgroundColor: boxclr,
+        textAlign: 'left', border:'10px solid white',position: 'top-left'}});
+var startPointLabel =  ui.Label({value: '', style: LonLatStyle});        
+var endPointLabel = ui.Label({value: '',style: LonLatStyle});  
+var distanceLabel = ui.Label({value: '',style: LonLatStyle});
+var intervalLabel = ui.Label({value: '',style: {
+            margin: '10px 0px 0px 10px',
+            fontSize: resultsize, color: txtclr, 
+            backgroundColor: backgroundclr}});
+var swathWidthLabel = ui.Label({value: '', style: {
+            margin: '10px 0px 0px 10px',
+            fontSize: resultsize, color: txtclr, 
+            backgroundColor: backgroundclr}});
+var sampleCountLabel = ui.Label({value: '',style: {margin: '0px 10px 5px 10px', 
+          fontSize: resultsize, color: sm_txt_clr, backgroundColor: backgroundclr}});
+var calculationLabel = ui.Label({value: '', style: ResultStyle});
+
+
+//////// Build Ui Button Styles ///////////
+// Build GUI Button styles for use in Panel Widgets//////
+var DEMSelect = ui.Select({
+   items: [ {label:'ALOS DSM: Global 30m v3.2', value:'Alos30'}, 
+            {label:'AHN Netherlands 0.5m, Interpolated', value:'Netherland5'},
+            {label:'ArcticDEM 2m Mosaic',   value:'Arctic2'},
+            {label:'Australia Geoscience 5m',    value:'Australia5'},
+            {label:'Canadian NRCan 23m',    value:'Can23'},
+            {label:'SRTM Digital Elevation 30m',    value:'SRTM30'},
+            {label:'USGS 3DEP 1m National',    value:'USGS1'},
+            {label:'USGS 3DEP 10m National',    value:'USGS10'}],
+  value: 'Alos30',
+  onChange: function (){
+      GetExtent();
+      UpdateLocalDEM();},
+  style: {margin: '0px 0px 0px 10px', minWidth: '232px', border: '2px solid grey'}
+  });
+var Contour_chk = ui.Checkbox({
+  label: 'on/off',
+  value: false, 
+  onChange: function (){
+    var visb = Contour_chk.getValue();
+    contourLayer.setShown(visb);},
+  disabled: false,
+  style: {width: '100px', fontSize: txtsize, 
+    color: 'e8e8e8', backgroundColor: backgroundclr, margin: '0 0px 0px 10px'}
+});
+var Range_L = ui.Slider({
+  min:0,
+  max: 9000,
+  value: 0,
+  step: 25,
+  onChange: function(){
+    Range_L_txt.setValue(Range_L.getValue());
+    CI = ee.Number(Interval.getValue());
+    },
+  style: {stretch: 'horizontal', 
+  width:'265px', height: '25px', border: '3px solid white',
+  margin: '2px 0px 0px 0px'},
+});
+var Range_H = ui.Slider({
+  min:0,
+  max: 9000,
+  value: 9000,
+  step: 25,
+  onChange: function(){
+    Range_H_txt.setValue(Range_H.getValue());
+    CI = ee.Number(Interval.getValue());
+    },
+  style: {stretch: 'horizontal', 
+  width:'265px', height: '25px', border: '3px solid white',
+  margin: '2px 0px 0px 0px'},
+});
+var Interval = ui.Slider({
+  min:0,
+  max: 100,
+  value: 50,
+  step: 2,
+  onChange: function(){
+    Interval_txt.setValue(Interval.getValue());
+    CI = ee.Number(Interval.getValue());
+    },
+  style: {stretch: 'horizontal', 
+  width:'265px', height: '25px', border: '3px solid white',
+  margin: '2px 0px 0px 0px'},
+});
+var Range_L_txt = ui.Textbox({
+  value: Range_L.getValue(),
+  onChange: function(){
+    Range_L.setValue(Range_L_txt.getValue())},
+  style: {width:'60px', height: '25px',
+  margin: '2px 0px 0px 5px'},
+});
+var Range_H_txt = ui.Textbox({
+  value: Range_H.getValue(),
+  onChange: function(){
+    Range_H.setValue(Range_H_txt.getValue());},
+  style: {width:'60px', height: '25px',
+  margin: '2px 0px 0px 5px'},
+});
+var Interval_txt = ui.Textbox({
+  value: Interval.getValue(),
+  onChange: function(){
+    Interval.setValue(Interval_txt.getValue());},
+  style: {width:'60px', height: '25px',
+  margin: '2px 0px 0px 5px'},
+});
+var LocalBtn = ui.Button({
+  label: 'RESET LOCAL DEM',
+  onClick: localClick,
+  style: {margin: '10px 0px 5px 10px', minWidth: '330px', 
+      backgroundColor: backgroundclr, border: '2px solid grey'}
+  }); 
+
+var sw_width_slide = ui.Slider({
+  min:1,
+  max: 50,
+  value: 20,
+  step: 1,
+  style: {stretch: 'horizontal', width:'300px', height: '25px', border: '3px solid white'},
+  onChange: function(){
+        sw_width_txt.setValue(sw_width_slide.getValue());
+        if (pointcount <1){
+          }else{buildSwath();}
+        }
+});
+var sw_sample_slide = ui.Slider({
+  min:1,
+  max: 100,
+  value: 100,
+  step: 1,
+  style: {stretch: 'horizontal', width:'300px', height: '25px', border: '3px solid white'},
+  onChange: function(){
+        sw_sample_txt.setValue(sw_sample_slide.getValue());
+        if (pointcount <1){
+          }else{buildSwath();} 
+        }
+});
+var sw_width_txt = ui.Textbox({
+  value: sw_width_slide.getValue(),
+  onChange: function(){
+        sw_width_slide.setValue(sw_width_txt.getValue())},
+  style: {width:'60px', height: '25px',},
+});
+var sw_sample_txt = ui.Textbox({
+  value: sw_sample_slide.getValue(),
+  onChange: function(){
+        sw_sample_slide.setValue(sw_sample_txt.getValue())},
+  style: {width:'60px', height: '25px',},
+});
+var geod_chk = ui.Checkbox({
+  label: 'Geodesic Line Edges (global shortest path)',
+  value: true, 
+  onChange: function(){
+        if (pointcount <1){
+          }else{buildSwath();}
+        },
+  disabled: false,
+  style: {width: '400px', fontSize: resultsize, 
+    color: 'e8e8e8', backgroundColor: '202020'}
+});
+
+var plotBTN = ui.Button({
+  label: 'PLOT',
+  style: {margin: '10px 10px 10px 10px', border: '2px solid grey'}
+  });
+var resetBTN = ui.Button({
+  label: 'RESET',
+  style: {margin: '10px 10px 10px 10px', border: '2px solid grey'}
+  });
+var exportBTN = ui.Button({
+  label: 'EXPORT CSV',
+  style: {margin: '10px 10px 10px 10px', border: '2px solid grey'}
+  });
+var exportShapeBTN = ui.Button({
+  label: 'EXPORT KML',
+  style: {margin: '10px 10px 10px 10px', border: '2px solid grey'}
+  });
+
+//// Build UI Panel ////////
+var panel = ui.Panel({style: {width: '500px', backgroundColor: backgroundclr, position: 'bottom-left'}});
+{ui.root.insert(0,panel);
+panel.widgets().set(0,ui.Label( 'Topographic Swath Profiler', 
+        {fontWeight: 'bold', 
+        fontSize: '30px', 
+        color: titleclr, 
+        backgroundColor: backgroundclr}),     
+  ui.Panel.Layout.flow('horizontal'),
+      {margin: '0 0px 0px 10px', backgroundColor: backgroundclr});
+panel.widgets().set(1,ui.Panel([ui.Label(
+      'Click two points on the map, select Swath Width and Sample Density, then click PLOT. ' +
+      'Large swaths will require a low sample density to ensure a sample count below 20,000. '+
+      'Swaths can be sampled as a straight line, or a geodesic curve. '+ 
+      'Resulting plots are plotted west-east by default. '+
+      'Plots can be exported to .csv containing locations, elevations, and distances along the swath for each sampled point. '+
+      'To make a new swath, click RESET or edit the points on the map.', 
+    {margin: '0px 0px 10px 0px',
+      color: txtclr,
+      fontSize: txtsize, 
+      whiteSpace: 'wrap',
+      backgroundColor: backgroundclr}), ui.Label(
+      'High-resolution DEMs are available for local features. '+
+      'Select a DEM and click RESET LOCAL DEM.',
+      {margin: '0px 0px 10px 0px',
+      color: txtclr,
+      fontSize: txtsize, 
+      whiteSpace: 'wrap',
+      backgroundColor: backgroundclr})],
+    ui.Panel.Layout.flow('vertical'),
+      {margin: '0 0px 0px 10px', backgroundColor: backgroundclr})); 
+panel.widgets().set(2,ui.Panel([ui.Label(
+    '50 m Elevation Contours',
+    {margin: '0px 0px 0px 0px',
+    color: txtclr,
+    fontSize: txtsize, 
+    backgroundColor: backgroundclr}), Contour_chk],
+  ui.Panel.Layout.flow('horizontal'),
+    {margin: '0 0px 0px 10px', backgroundColor: backgroundclr}));
+panel.widgets().set(3,colorBar(bar.palette));
+panel.widgets().set(4,ui.Panel([ui.Label('Low', 
+  {margin: '0px 0px 10px 10px', fontSize: '11px', color: txtclr, backgroundColor: backgroundclr}),
+  ui.Label('High', 
+  {margin: '0 275px', fontSize: '11px', color: txtclr, backgroundColor: backgroundclr})], 
+  ui.Panel.Layout.flow('horizontal'),
+  {backgroundColor: backgroundclr}));
+panel.widgets().set(5,ui.Panel([ui.Label(
+      'DEM in use:',
+      {margin: '8px 0px 0px 0px',
+      color: txtclr,
+      fontSize: txtsize, 
+      backgroundColor: backgroundclr}), DEMSelect],
+  ui.Panel.Layout.flow('horizontal'),
+      {backgroundColor: backgroundclr, margin: '0px 5px 5px 10px'}));
+//panel.widgets().set(6,ui.Panel([ui.Label(
+//      'Elevation Range Low (meters):',
+//      {margin: '0px 0px 0px 0px',
+//      color: txtclr,
+//      fontSize: txtsize, 
+//      backgroundColor: backgroundclr})],
+//  ui.Panel.Layout.flow('vertical'),
+//      {backgroundColor: backgroundclr, margin: '0px 0px 0px 10px'}));
+//panel.widgets().set(7,ui.Panel([Range_L, Range_L_txt],
+//  ui.Panel.Layout.flow('horizontal'),
+//      {backgroundColor: backgroundclr, margin: '0px 0px 0px 10px'}));
+//panel.widgets().set(8,ui.Panel([ui.Label(
+//      'Elevation Range High (meters):',
+//      {margin: '0px 0px 0px 0px',
+//      color: txtclr,
+//      fontSize: txtsize, 
+//      backgroundColor: backgroundclr})],
+//  ui.Panel.Layout.flow('vertical'),
+//      {backgroundColor: backgroundclr, margin: '0px 0px 0px 10px'}));
+//panel.widgets().set(9,ui.Panel([Range_H, Range_H_txt],
+//  ui.Panel.Layout.flow('horizontal'),
+//      {backgroundColor: backgroundclr, margin: '0px 0px 0px 10px'}));
+panel.widgets().set(10,ui.Panel([ui.Label(
+      'Contour Interval (meters):',
+      {margin: '0px 0px 0px 0px',
+      color: txtclr,
+      fontSize: txtsize, 
+      backgroundColor: backgroundclr})],
+  ui.Panel.Layout.flow('vertical'),
+      {backgroundColor: backgroundclr, margin: '0px 0px 0px 10px'}));
+panel.widgets().set(11,ui.Panel([Interval, Interval_txt],
+  ui.Panel.Layout.flow('horizontal'),
+      {backgroundColor: backgroundclr, margin: '0px 0px 0px 10px'}));
+panel.widgets().set(12,LocalBtn);
+panel.widgets().set(13, ui.Panel([ui.Label({value:
+        'NOTE: Local DEM must be reselected with navigation to a new map area. ' + 
+        'Points selected outside the bounds of the Local Hilshade will not return a value.',
+        style: {margin: '0px 0px 0px 0px',
+        color: txtclr,
+        fontSize: txtsize,
+        whiteSpace: 'wrap',
+        backgroundColor: backgroundclr}}),
+      errorLabel],
+    ui.Panel.Layout.flow('vertical'),
+      {margin: '0px 0px 10px 10px', backgroundColor: backgroundclr, 
+      maxWidth: '330px', minHeight: '160px'}));   
+
+panel.widgets().set(14,ui.Panel([ui.Label({value: 'Start by selecting swath endpoints on map ',
+            style: {margin: '0px 0px 0px 0px',
+            fontSize: '20px', 
+            color: titleclr, whiteSpace: 'wrap',
+            backgroundColor: backgroundclr}})],
+    ui.Panel.Layout.flow('vertical'),
+      {margin: '0 0px 0px 10px', backgroundColor: backgroundclr})); 
+
+panel.widgets().set(15,ui.Panel([ui.Label({value: 'Start (Lat, Lon): ',
+            style: {fontWeight: 'bold', fontSize: txtsize, color: startColor, backgroundColor: backgroundclr}}),
+      startPointLabel],
+      ui.Panel.Layout.flow('horizontal'),{backgroundColor: backgroundclr}));
+panel.widgets().set(16,ui.Panel([ui.Label({value: 'End (Lat, Lon): ',
+          style: {fontWeight: 'bold', fontSize: txtsize, color: startColor, backgroundColor: backgroundclr}}),
+      endPointLabel],
+    ui.Panel.Layout.flow('horizontal'),{backgroundColor: backgroundclr}));
+panel.widgets().set(17,ui.Panel([ui.Label({value: 'Distance: ',
+          style: {fontWeight: 'bold', fontSize: txtsize, color: startColor, backgroundColor: backgroundclr}}),
+      distanceLabel],
+    ui.Panel.Layout.flow('horizontal'),{backgroundColor: backgroundclr}));      
+panel.widgets().set(18,ui.Panel([geod_chk],  
+  ui.Panel.Layout.flow('horizontal'), {backgroundColor: backgroundclr}));
+panel.widgets().set(19,ui.Panel([ui.Label({value: 'Swath Width (% of length); ', 
+            style: {
+            margin: '10px 0px 0px 10px',
+            fontSize: resultsize, color: txtclr, 
+            backgroundColor: backgroundclr}}),
+        swathWidthLabel], 
+  ui.Panel.Layout.flow('horizontal'),{backgroundColor: '202020'}));
+panel.widgets().set(20,ui.Panel([sw_width_slide, sw_width_txt], 
+  ui.Panel.Layout.flow('horizontal'), {backgroundColor: backgroundclr}));
+panel.widgets().set(21,ui.Panel([ui.Label({value:'Sample Density (% of DEM); Sample Interval: ', 
+            style: {margin: '10px 0px 0px 10px',
+            fontSize: resultsize, color: txtclr, 
+            backgroundColor: backgroundclr}}),
+        intervalLabel],
+  ui.Panel.Layout.flow('horizontal'), {backgroundColor: backgroundclr}));
+panel.widgets().set(22,ui.Panel([sw_sample_slide, sw_sample_txt], 
+  ui.Panel.Layout.flow('horizontal'), {backgroundColor: backgroundclr}));
+panel.widgets().set(23,ui.Panel([ui.Label({value: 'Approximate Sample Count: ', style: {margin: '0px 10px 5px 10px', fontSize: resultsize, color: txtclr, backgroundColor: backgroundclr}}),
+        sampleCountLabel],
+  ui.Panel.Layout.flow('horizontal'), {backgroundColor: backgroundclr}));
+panel.widgets().set(24,ui.Panel([ui.Label({value: '(<20,000 required)', style: {margin: '0px 10px 10px 10px', fontSize: resultsize, color: txtclr, backgroundColor: backgroundclr}}),
+        calculationLabel], 
+  ui.Panel.Layout.flow('vertical'),{backgroundColor: backgroundclr, minHeight: '65px'}));
+panel.widgets().set(25,ui.Panel([plotBTN, exportBTN, exportShapeBTN, resetBTN],
+  ui.Panel.Layout.flow('horizontal'),{backgroundColor: '202020'}));
+panel.widgets().set(26,ui.Panel([ui.Label({value: ' ', 
+  style: ResultStyle})], 
+  ui.Panel.Layout.flow('horizontal'),{backgroundColor: '202020'}));
+panel.widgets().set(27,panelCoordSave);
+
+}
+
+//// Build Map Layers ///////
+/// Builds initial global layers of map using ALOS 30m DEM
+{ 
+  CI = ee.Number(Interval.getValue());  
+  
+  /// Build Contours
+  var linesA = ee.List.sequence(0, 9000, CI);
+  var contourlinesA = linesA.map(function(line) {
+  var mycontour = comb
+    .convolve(ee.Kernel.gaussian(5, 3))
+    .subtract(ee.Image.constant(line)).zeroCrossing() 
+    .multiply(ee.Image.constant(line)).toFloat();
+    
+  return mycontour.mask(mycontour);});
+  contourlinesA = ee.ImageCollection(contourlinesA).mosaic().int();
+  
+  var elevationVis = {
+    'min': 0,
+    'max': 9000,
+    'palette': ['015c00', 'f8ff6b', 'ceb03f', '923f00', 'ffffff'],
+    'opacity': 0.5,
+  };
+  var ContourVisA = {
+    'min': 0,
+    'max': 9000,
+    'palette': ['7FB5FF'],
+    'opacity': 0.5,
+  };
+  var hillshade = ee.Terrain.hillshade(comb);
+  hs = ui.Map.Layer(hillshade,{}, 'Global Hillshade', false);
+  contourLayer = ui.Map.Layer(contourlinesA, ContourVisA, 'Global 50 m Contours', false);
+  
+  GetExtent(); ///////For use in showing user extent of selected Local DEM
+  //DEMExtent = ui.Map.Layer(DEMbounds, {'min': 0, 'max': 1,
+  //  'palette': ['7FB5FF'], 'opacity': 0.5,},
+  //  'Extent of Selected DEM', false);
+  
+  Map.layers().set(0, hs);
+  Map.layers().set(1, ui.Map.Layer(comb.resample('bilinear').mask(mask2), elevationVis, 'Global Elevation', false));
+  Map.layers().set(2, ui.Map.Layer(comb.resample('bilinear').mask(mask1), {
+      min: -7000, max: 0, 
+      palette: ['000000','0231b6','00a0ff','99ccff'], 
+      opacity: 0.5}, 'Global Bathymetry', false));
+  Map.layers().set(3,contourLayer);  
+  Map.layers().set(4,hillshadeLocal);
+  Map.layers().set(5,contourLocal);
+  Map.layers().set(6,elevationLocal);
+  
+  Map.layers().set(7,lineLayer); /// Needs to be built in order to hold place for points//
+  Map.layers().set(8,boxLayer);
+  Map.layers().set(9, DEMExtent);
+  }
+
+
+// Build Interactive/Automated functions /////
+// Uses debounce to call the function at most every 3000/100 milliseconds.
+var LocalDEM = ui.util.debounce(function() { 
+  //// Builds local DEM in background with user navigation
+  //// Function is called automatically so that the 'Local DEM' is built and 
+  //// ready to display quickly when 'Reset Local DEM' button is clicked. 
+  
+  //// Execution is redirected to UpdateLocalDEM()
+  //// Wrapper functioin  is required to enable the use of Map.unlisten(Idle), 
+  //// which is rendered inoperable when LocalDEM() is called. 
+
+  UpdateLocalDEM();
+}, 3000);
+
+var editCoordinates = ui.util.debounce(function() {
+  var pointsEd = Map.drawingTools().layers().get(0).toGeometry();
+  var listEd = [];
+  if (pointcount == 1){ /// Deal with GEE initiallizing "Point" rather than "Multipoint"
+    listEd = ee.List([pointsEd.coordinates()]);
+    }else{
+    listEd = ee.List(pointsEd.coordinates());
+    }
+
+  var CoordStringB = listEd.map(function(n){
+    return ee.String('(')
+      .cat(ee.Number(ee.List(n).get(0)).format('%.4f')).cat(', ')
+      .cat(ee.Number(ee.List(n).get(1)).format('%.4f'))
+      .cat(')');//.cat('\r\n');
+    });  
+  
+  var startSting = CoordStringB.get(0);
+  startPointLabel.setValue(startSting.getInfo());
+
+  multiPointCoordinates = pointsEd.coordinates();
+  
+  if (pointcount > 1){//// On 2nd map click
+    var endSting = CoordStringB.get(-1);
+    endPointLabel.setValue(endSting.getInfo());
+    buildSwath();  
+      }
+
+  
+},250);
+var getCoordinates = ui.util.debounce(function() {
+  errorLabel.setValue('');
+  var points = Map.drawingTools().layers().get(0).toGeometry();
+
+  var list = [];
+  if (pointcount === 0){ /// Deal with GEE initiallizing "Point" rather than "Multipoint"
+    list = ee.List([points.coordinates()]);
+    }else{
+    list = ee.List(points.coordinates());
+    }
+  var CoordString = list.map(function(n){
+    return ee.String('(')
+      .cat(ee.Number(ee.List(n).get(1)).format('%.4f')).cat(', ')
+      .cat(ee.Number(ee.List(n).get(0)).format('%.4f'))
+      .cat(')');//.cat('\r\n');
+    });
+  
+  var startSting = CoordString.get(0);
+  startPointLabel.setValue(startSting.getInfo());
+  
+  multiPointCoordinates = points.coordinates();
+  pointcount++;  
+  
+  if (pointcount > 1){//// On 2nd map click
+      var endSting = CoordString.get(-1);
+      endPointLabel.setValue(endSting.getInfo());
+      buildSwath();
+    }else if (pointcount > 2){Reset();}//// on 3rd map click restart
+},100);
+
+var updateEventCount = ui.util.debounce(function() {
+  eventCount = 0;
+},2000); /// Helper function for localDEM
+var addLayerBTN = ui.util.debounce(function() {
+  //// Resets map in event of new layer added
+  errorLabel.setValue('ERROR: Formation of new layers is not permited. Select new points.');
+  resetSwath();
+},2000); //// Resets map in event users adds layer
+
+///// Initiallize Point Selection Tools//////////////
+var Idle = Map.onIdle(LocalDEM);
+// Don't make imports that correspond to the drawn points.
+Map.drawingTools().setLinked(false);
+// Limit the draw modes to points.
+Map.drawingTools().setDrawModes(['point']);
+// Add an empty layer to hold the drawn points.
+Map.drawingTools().addLayer([], 'Working Points', 'red');
+// Set the geometry type to be point.
+Map.drawingTools().setShape('point');
+// Enter drawing mode.
+Map.drawingTools().draw();
+Map.drawingTools().onDraw(getCoordinates); /// Activates point selection//
+Map.drawingTools().onEdit(editCoordinates);
+Map.onChangeBounds(updateEventCount);
+Map.drawingTools().onLayerAdd(addLayerBTN);
+
+
+
+
+////  Main Button Functions //////
+////  A series of buttons and calback functions that ////
+////  initiate gathering and processing of data.      ////
+plotBTN.onClick(function(){
+  //// Builds SwathObj, Queries DEM, and Builds plots///
+  
+/////// Build Swath Obj////////////////
+
+//////// Interupt if calculation too complicated
+  if (sam_cnt.getInfo() > 20000) { 
+      sm_txt_clr = 'red';
+      calculationLabel.style().set('color', sm_txt_clr);
+      calculationLabel.setValue('ERROR: LOWER RESAMPLE SCALE RECOMMENDED');
+    } else {
+      calculationLabel.style().set('color', titleclr);
+      calculationLabel.setValue('CALCULATING, Please wait...');
+     
+  Geod = geod_chk.getValue(); 
+  DEMquery = DEMquery.addBands(latLonImg);
+
+///// Series of functions that build a line grid spaced according to sample interval.
+  var sw_boundN = ee.Geometry.LineString(
+    [sw_start_line.coordinates().get(0),sw_end_line.coordinates().get(0)]);
+  var sw_boundS = ee.Geometry.LineString(
+    [sw_start_line.coordinates().get(1),sw_end_line.coordinates().get(1)]);
+    
+  var startPoints = linesToPoints(sw_boundN, perp_cnt.divide(1).toInt()); //// "sw_start_line" edit "perp_cnt"
+  var endPoints = linesToPoints(sw_boundS, perp_cnt.divide(1).toInt());
+  var aggregate = startPoints.zip(endPoints);
+  
+  var perpendicularLines = ee.FeatureCollection(aggregate.map(function(element){/// Returns ee.List of lines drawn perpendicular to the swath
+      var nline = ee.Feature(ee.Geometry.LineString(element, proj, Geod)).set('linecount',aggregate.indexOf(element));
+    return nline}));
+    
+  var perpLineCount = perpendicularLines.size();
+
+  var mult = ee.Number(sw_sample_slide.getValue()).divide(100);
+  var elevTransect = DEMquery.reduceRegions({
+        collection: perpendicularLines,          
+        reducer: ee.Reducer.toList(),
+        scale: DEMquery.select('elevation').projection()
+        .nominalScale().divide(mult).ceil(),
+        crs: DEMquery.select('elevation').projection()
+        });
+
+  elevTransect = elevTransect.map(function (feat){
+        var lnLength = feat.geometry().length(10).ceil();
+        var elevTemp = ee.List(feat.get('elevation'));
+        var lonTemp = ee.List(feat.get('longitude'));
+        var latTemp = ee.List(feat.get('latitude'));
+        
+        var intervalMeter = line.length(10).divide(perpLineCount); /// calculate inteval based on user-selected line length
+          
+        elevTemp = elevTemp.sort(lonTemp);//.reverse(); Currently W-E
+        latTemp = latTemp.sort(lonTemp);
+        lonTemp = lonTemp.sort(lonTemp);
+          
+        var distYTemp = ee.List.sequence({start: 0, end: lnLength, count: elevTemp.size()});
+        distYTemp = distYTemp.map(function(element){return ee.Number(element).ceil()});
+        distYTemp = distYTemp.sort();
+        
+        var lineCount = ee.List.sequence({start: feat.getNumber('linecount'), end: feat.getNumber('linecount').add(1), count: elevTemp.size()});
+        lineCount = lineCount.map(function(element){return ee.Number(element).floor()});
+        var distXTemp = lineCount.map(function(element){return ee.Number(element).multiply(intervalMeter)});
+          
+        lineCount = feat.getNumber('linecount');
+        var lineDist = lineCount.multiply(sampleInterval);
+          
+        var lineMean = elevTemp.reduce(ee.Reducer.mean());
+        var lineMax = elevTemp.reduce(ee.Reducer.max());
+        var lineMin = elevTemp.reduce(ee.Reducer.min());
+          
+        var nFeat = feat.set({distanceY: distYTemp,
+                    distanceX: distXTemp,
+                    lineCount: lineCount,
+                    lineDist: lineDist,
+                    lineLength: lnLength,                       
+                    elevation: elevTemp,
+                    longitude: lonTemp,
+                    latitude: latTemp,
+                    lineMean: lineMean,
+                    lineMax: lineMax,
+                    lineMin: lineMin});
+        return nFeat;
+        });   
+  SwathObj = ee.Dictionary({distanceY: elevTransect.aggregate_array('distanceY').flatten(),
+                              distanceX: elevTransect.aggregate_array('distanceX').flatten(),
+                              elevation: elevTransect.aggregate_array('elevation').flatten(),
+                              latitude: elevTransect.aggregate_array('latitude').flatten(),
+                              longitude: elevTransect.aggregate_array('longitude').flatten(),
+                              lineCount: elevTransect.aggregate_array('lineCount').flatten(),
+                              lineDist: elevTransect.aggregate_array('lineDist').flatten(),
+                              lineMean: elevTransect.aggregate_array('lineMean').flatten(),
+                              lineMax: elevTransect.aggregate_array('lineMax').flatten(),
+                              lineMin: elevTransect.aggregate_array('lineMin').flatten()
+                              });      
+  
+////////// Build X-Y Plot Data ///////////////
+  distSort = ee.List(SwathObj.get('distanceX')).map(function(e){return ee.Number(e).divide(1000);});
+  elevSort = ee.List(SwathObj.get('elevation'));
+  
+  plotLabels = ee.List(SwathObj.get('lineDist')).map(function(e){return ee.Number(e).divide(1000);});
+  plot2Array = ee.Array([SwathObj.get('lineMax'), SwathObj.get('lineMin'), SwathObj.get('lineMean')]);
+    
+  panel.remove(plot1);
+  panel.remove(plot2);
+  panel.widgets().set(28, panelCoordSave2);
+  
+  plot1 = ui.Chart.array.values({
+        array: elevSort,
+        axis: 0, 
+        xLabels: distSort,
+        })
+    .setOptions({title: 'Topographic Swath Profile',
+      colors: [startColor],
+      hAxis: {title: 'Distance (km)',titleTextStyle: {italic: false, bold: true}},
+      vAxis: {title: 'Elevation (m)',titleTextStyle: {italic: false, bold: true}},
+      pointSize: 0.1,
+      dataOpacity: 0.5,
+      legend: {position: 'none'}});
+
+  plot2 = ui.Chart.array.values({
+        array: plot2Array, 
+        axis: 1, 
+        xLabels: plotLabels})
+    .setSeriesNames(['Max', 'Min', 'Mean'])
+    .setOptions({title: 'Topographic Swath Profile',
+      colors: [startColor,endColor, backgroundclr],
+      hAxis: {title: 'Distance (km)',titleTextStyle: {italic: false, bold: true}},
+      vAxis: {title: 'Elevation (m)',titleTextStyle: {italic: false, bold: true}},
+      pointsVisible: false,
+      dataOpacity: 0.5,
+      legend: {position: 'top-right'},
+      lineSize: 1});
+  
+      
+//// Add plots to panel ///// 
+  panel.remove(panelCoordSave);
+  panel.remove(panelCoordSave2);
+  panel.insert(27,plot1);
+  panel.insert(28,plot2);
+  calculationLabel.setValue('');
+  }
+}); /// Query DEM
+exportBTN.onClick(function(){
+  /// Build CSV ////
+  ///// Convert to Collection for export
+  var swathCollection = ee.FeatureCollection(
+    SwathObj.keys().map(function(k){
+      return ee.Feature(null, {key: k, value: SwathObj.get(k)});
+    })
+    );
+  
+  var SwathDownloadUrl = swathCollection.getDownloadURL({
+    format: 'CSV',
+    filename: 'TopoSwathTable'
+    });
+
+  calculationLabel.setValue('Download Swath CSV').setUrl(SwathDownloadUrl);
+});// Build CSV
+exportShapeBTN.onClick(function(){
+  /// Build KML ////
+  ///// Convert to Collection for export
+  
+  // FeatureCollection from a list of features.
+
+  var swathShapeCollection = ee.FeatureCollection([
+    ee.Feature(swathBox),
+    ee.Feature(line)]); 
+  
+  var SwathShapeDownloadUrl = swathShapeCollection.getDownloadURL({
+    format: 'KML',
+    filename: 'TopoSwathShape'
+    });
+
+  calculationLabel.setValue('Download Swath KML').setUrl(SwathShapeDownloadUrl);
+});// Build KML
+resetBTN.onClick(function(){resetSwath();});/// Wrapper function for resetBTN
+
+function resetSwath(){
+  pointcount = 0;
+  boxLayer.setShown(false);
+  lineLayer.setShown(false);
+
+  Map.drawingTools().clear();
+  
+  Map.drawingTools().setDrawModes(['point']);
+  // Add an empty layer to hold the drawn points.
+  Map.drawingTools().addLayer([], 'Working Points', 'red');
+  // Set the geometry type to be point.
+  Map.drawingTools().setShape('point');
+  // Enter drawing mode.
+  Map.drawingTools().draw();
+  Map.drawingTools().onDraw(getCoordinates); /// Activates point selection//
+  Map.drawingTools().onEdit(editCoordinates);
+  Map.onChangeBounds(updateEventCount);
+  Map.drawingTools().onLayerAdd(addLayerBTN);
+  calculationLabel.setValue(' ').setUrl(null);
+  }/// Reset map + swath //////////
+function localClick(){
+  //// Initiates on 'Reset Local DEM'
+  //// Makes hillshade constructed by LocalDEM() or UpdateLocalDEM() visible
+    if (eventCount === 0) {
+      UpdateLocalDEM()} else{}
+    GetExtent();
+
+    ValidData = validDEM(DEMbounds);/// returns 5 if valid
+    var TempString = ee.Algorithms.If(ValidData.eq(5), "",
+      "ERROR: Selected DEM does not contain data at location. Reselet DEM or navigate to new location");
+    errorLabel.setValue(TempString.getInfo());
+
+    hillshadeLocal.setName('Local Hillshade').setShown(true);
+    elevationLocal.setName('Local Elevation').setShown(false);
+    contourLocal.setName('Local Contours').setShown(false);
+    DEMExtent.setName('Extent of Selected DEM').setShown(false);
+    
+    Map.unlisten(Idle); /// turn off LocalDEM() automatic function
+    eventCount = 1;
+  } /// Process button for LocalDEM
+  
+  
+//// Util functions  ////
+function buildSwath(){
+  //// Functoin executed on any change to swath geometry,
+  //// sliders, Geodesic checkbox and on swath initiation.
+  //// Updates map features and calculates sample size 
+
+    if (pointcount >1){
+    SelectDEM(); 
+    
+    var sampleScale = ee.Number(sw_sample_slide.getValue()).divide(100);/// convert from percent
+    var widthMult = ee.Number(sw_width_slide.getValue()).divide(100); //// convert from ratio
+    Geod = geod_chk.getValue();
+    c = Map.getCenter();
+
+    //// Make line //////
+    line = ee.Geometry.LineString([multiPointCoordinates.get(0), 
+                multiPointCoordinates.get(1)], proj, Geod);
+                
+    ///// Calculate geometries
+    var swathGeometries = geometriesMeters(sampleScale, widthMult, ee.Feature(line));// converts percent/ratio to m scale; returns[SampleDist_m, SwWidth_m]
+    sampleInterval = swathGeometries.get(0);
+    
+    perp_cnt = ee.Number(ee.Feature(line).length(10)).divide(swathGeometries.get(0));
+    parallel_cnt = ee.Number(swathGeometries.get(1)).divide(swathGeometries.get(0));  
+    sam_cnt = parallel_cnt.multiply(perp_cnt);
+    sam_cnt = sam_cnt.divide(1000).ceil().multiply(1000);
+    
+    var degWidth = ee.Number(ee.Feature(line).length(10, proj)).multiply(widthMult);
+
+    sw_start_line = perpline(line, degWidth, 'start', perp_cnt, proj, Geod);
+    sw_end_line = perpline(line, degWidth, 'end', perp_cnt, proj, Geod);
+
+    //// Make bouding box
+    swathBox = ee.Geometry.Polygon([
+        sw_start_line.coordinates().get(0), 
+        sw_start_line.coordinates().get(1),
+        sw_end_line.coordinates().get(1), 
+        sw_end_line.coordinates().get(0)], proj, Geod);
+        
+        
+    ///// Update panel 
+    var linelength = ee.String('~ ')
+          .cat(line.length(10).divide(1000).format('%.0f')).cat(' km');
+    distanceLabel.setValue(linelength.getInfo());
+    
+    if (sam_cnt.getInfo() < 20000){sm_txt_clr = 'e8e8e8'}else{sm_txt_clr = 'red'}
+    sampleCountLabel.style().set('color', sm_txt_clr);
+    sampleCountLabel.setValue(ee.String(sam_cnt.format('%.0f')).getInfo());
+
+    calculationLabel.setValue(' ');
+    
+    /// Update map layers///
+    lineLayer.setEeObject(line).setName('Line').setShown(true);
+    boxLayer.setEeObject(swathBox).setName('Sample Region').setShown(true);
+    
+    Map.drawingTools().edit();
+    }
+}  ///Draws box on Map
+function geometriesMeters(CalcInterval, CalcWidthMult, CalcLine){
+    /// Aggrigates swath geometries, converts to meters, and updates ui panel
+    /// buildSwath() helper functoin
+    
+    var SwWidth_m = ee.Number(CalcLine.length(10)).multiply(CalcWidthMult);
+    var SampleDist_m = DEMquery.select('elevation').projection().nominalScale().divide(CalcInterval);
+    
+    //update DISPLAY/////////////
+    var w_met = ee.String(' ~').cat(SwWidth_m.multiply(0.001).format('%.0f')).cat(' km');
+    //var s_int = ee.String(' ~ ').cat(SampleDist_m.multiply(0.001).format('%.0f')).cat(' km');
+    var s_int = ee.String(' ~').cat(SampleDist_m.format('%.0f')).cat(' m');
+    swathWidthLabel.setValue(w_met.getInfo());
+    intervalLabel.setValue(s_int.getInfo());
+    
+    return ee.List([SampleDist_m, SwWidth_m]);
+} ///buildSwath() helper function
+function perpline(line_in, length, method, count, projection, geodesic) {
+  //// Rotates line 90 degrees  ////////////////////
+  //// -desired new line length in DEGREES  ////////
+  
+  //// -needs additional work to enable method, count ///
+
+  //// Extract coordinated from original line determint 
+  var start = ee.Array([line_in.coordinates().get(0)]);
+  var finish = ee.Array([line_in.coordinates().get(1)]);
+  var Xs = ee.Array([start.get([0,0]),finish.get([0,0])]);
+  var Ys = ee.Array([start.get([0,1]),finish.get([0,1])]);
+  
+  //// Degree delta between start and end of original line 
+  var dx = ee.Number((Xs.get([0])).subtract(Xs.get([1]))); /// in degree!!!!!!!!
+  var dy = ee.Number((Ys.get([0])).subtract(Ys.get([1])));
+  
+  //// Adjust for  lines crossing International Date Line
+  var testS = Xs.get([0]).getInfo();
+  var testE = Xs.get([1]).getInfo();
+  if(testS > testE){
+    if(testE < 0){
+      var tempArray = ee.Array([start.get([0,0]),finish.get([0,0]).add(360)]);
+      dx = ee.Number((tempArray.get([0])).subtract(tempArray.get([1])));
+        }}
+
+  var ang_alng = dy.atan2(dx); ///// out polar coordinate theta (bearing)
+  var mp_x=ee.Number(0);
+  var mp_y=ee.Number(0);
+  
+  ////  Method ///////////////////////
+  //// Places new line @ middle of existing line, ///
+  //// start or ends of existing line, or some other position.  ///
+  //// (mp = midpoint in new line) ////  
+  if (method === 'middle') {
+    mp_x=ee.Number((Xs.get([0])).add(Xs.get([1]))).divide(2);
+    mp_y=ee.Number((Ys.get([0])).add(Ys.get([1]))).divide(2);
+    }
+  else if(method === 'start') {
+    mp_x=ee.Number(Xs.get([0]));
+    mp_y=ee.Number(Ys.get([0]));
+    }
+  else if(method === 'end') {
+    mp_x=ee.Number(Xs.get([1]));
+    mp_y=ee.Number(Ys.get([1]));
+    }
+  else if (method === 'sample') {
+    mp_x=ee.Number((Xs.get([0])).add(dx/sample));
+    mp_y=ee.Number((Ys.get([0])).add(dy/sample));
+    } 
+
+  ///// Determines distance in degrees to shift line endpoints (includes polar to cartesian) ////
+  var px = ee.Number(length).multiply(0.5).multiply((ang_alng.add(Math.PI/2).sin())); // left point x
+  var py = ee.Number(length).multiply(0.5).multiply((ang_alng.add(Math.PI/2).cos())); // left point y
+  var mx = ee.Number(length).multiply(0.5).multiply((ang_alng.subtract(Math.PI/2).sin())); // right point x
+  var my = ee.Number(length).multiply(0.5).multiply((ang_alng.subtract(Math.PI/2).cos())); // right point y
+
+  var start_x=mp_x.add(px); 
+  var start_y=mp_y.add(py);
+  var stop_x=mp_x.add(mx);
+  var stop_y=mp_y.add(my);
+  
+  //// Construct newline as ee.Geometry ///
+  var nline = ee.Geometry.LineString([start_x, start_y, stop_x, stop_y], projection, geodesic);
+
+  return nline;
+} ///buildSwath() helper function
+function linesToPoints(line, count){
+    //// Make list of points along a line. Returns ee.List 
+    var LineBreaks = line.cutLines(
+          ee.List.sequence(0, (line.length(10)), null, count), 
+         1000).geometries();
+      
+    var linePoints = LineBreaks.map(function (lines) {
+         //// make point of line's first end
+         var coordList = ee.Geometry(lines).coordinates();
+         var point = ee.Algorithms.GeometryConstructors.Point(coordList.get(0)); 
+         return ee.List(point);
+          });
+          
+    var final = ee.Geometry(LineBreaks.get(-1)).coordinates();
+    final =  ee.Algorithms.GeometryConstructors.Point(final.get(1));
+    linePoints = linePoints.add(final);
+
+  return linePoints;
+  } ///plotBTN() helper function
+
+////// Other complicated button functions/////
+function GetExtent(){
+  //// Called with change in DEM select dropdown menu. 
+  //// Builds an ee.Image that shows extent of the DEM selected.
+  //// Used with validDEM() to create error message if outside bounds of DEM.
+  //// Could be displayed to help UEx (is computationally intensive)
+  SelectDEM();
+  var ElevSelected = ElevUse;
+  var condition = ee.Algorithms.If(ee.Algorithms.IsEqual(ee.Algorithms.ObjectType(Can23),
+              ee.Algorithms.ObjectType(ElevUse)), 0, 1);
+  if (condition.getInfo() === 0){ //// ElevUse is a Collection///
+      ElevSelected = ElevUse.mosaic();
+      //ElevSelected = ElevSelected.resample('bilinear');
+  }
+  
+  DEMbounds = ElevSelected.unmask(-5).neq(-5);
+  DEMbounds = DEMbounds.selfMask();
+  } //// Helper function for LocalDEM
+function UpdateLocalDEM(){ 
+    //// Builds local DEM 
+    //// Called through automated LocalDEM() wrapper function, and with
+    //// GetExtent() so DEM is ready for user.
+    //// Called within localClick() function if a local DEM already exists.
+
+    SelectDEM();
+    var condition = ee.Algorithms.If(ee.Algorithms.IsEqual(ee.Algorithms.ObjectType(Can23),
+                ee.Algorithms.ObjectType(ElevUse)), 0, 1);
+    if (condition.getInfo() === 0){ //// ElevUse is a Collection///
+      NewClip = manageCollection(ElevUse);
+      } else {
+        NewClip = ee.Terrain.products(ElevUse);
+        }
+  
+    NewClip = NewClip.rename(
+      ['elevation', 'slope', 'aspect', 'hillshade']);
+    DEMquery = NewClip.select('elevation');
+    
+    CI = ee.Number(Interval.getValue()); 
+    
+    /// Build Contours
+    var linesB = ee.List.sequence(0, 9000, CI);
+    var contourlinesB = linesB.map(function(lineB) {
+    var mycontourB = NewClip.select('elevation')
+      .convolve(ee.Kernel.gaussian(2, 1, 'meters'))
+      .subtract(ee.Image.constant(lineB)).zeroCrossing() 
+      .multiply(ee.Image.constant(lineB)).toInt();
+    
+    return mycontourB.mask(mycontourB);});
+    contourlinesB = ee.ImageCollection(contourlinesB).mosaic().int();
+    
+    
+    //// Build Map Layers ///////
+    var elevationVisLocal = {
+      'min': 0,
+      'max': 9000,
+      'palette': ['015c00', 'f8ff6b', 'ceb03f', '923f00', 'ffffff'],
+      'opacity': 0.5,
+      };
+    var ContourVisLocal = {
+      'min': 0,
+      'max': 9000,
+      'palette': ['7FB5FF'],
+      'opacity': 0.5,
+      };
+    
+    hillshadeLocal = ui.Map.Layer(NewClip.select('hillshade'),{}, 'Local Hillshade', false);
+    elevationLocal = ui.Map.Layer(NewClip.select('elevation').resample('bilinear'), elevationVisLocal, 'Local elevation', false);
+    contourLocal = ui.Map.Layer(contourlinesB, ContourVisLocal, 'Local Contours', false);
+    DEMExtent = ui.Map.Layer(DEMbounds, {'min': 0, 'max': 1,
+            'palette': ['7FB5FF'], 'opacity': 0.5,},
+            'Extent of Selected DEM', false);
+
+
+    Map.layers().set(4, hillshadeLocal);
+    Map.layers().set(5, elevationLocal);
+    Map.layers().set(6, contourLocal);
+    Map.layers().set(9, DEMExtent);
+    eventCount = 0;
+  } /// Helper function for LocalDEM
+function validDEM(DEMTest){
+    //// Validates that user selected DEM has data within viewing window.
+    /// Returns '5' if DEM is valid
+    /// If bands exist, calculates number of pixels within window; >1 = valid
+    
+    var numberBands = DEMTest.bandNames().size();
+    var valid = [];
+
+    if (numberBands.getInfo() === 0){ valid = ee.Number(0);}
+    else{
+        var testRegion = ee.Geometry(Map.getBounds(1));
+        DEMTest = DEMTest.clip(testRegion);
+        
+        var dummyImg = ee.Image(1).clip(testRegion).rename('Region');
+        var nPixels = DEMTest
+                   .multiply(dummyImg)
+                   .reduce(ee.Reducer.count())
+                   .rename('nPixels').selfMask();
+        var stats = nPixels.reduceRegion({
+              reducer: ee.Reducer.sum(), 
+              geometry: testRegion, 
+              scale: 1000}); 
+        valid = ee.Number(ee.Algorithms.If((stats.getNumber('nPixels')).gt(1),5,0));
+        }
+        
+    return valid;    /// Returns '5' if DEM is valid
+  } /// Helper function for LocalDEM
+function manageCollection(collIn){
+      //// Filter the collection
+      roi = ee.Geometry(Map.getBounds(1));
+      var buf = ee.Number(Map.getScale()).multiply(500);
+      var filterBounds = roi.buffer(buf);
+      collIn = collIn.filterBounds(filterBounds);
+      var colProj = [];
+      //print(collIn.get('system:id'))
+      var collName = collIn.get('system:id');
+      if (collName.getInfo() == 'NRCan/CDEM'){
+        colProj = collIn.first().projection().atScale(23);}
+      else if (collName.getInfo() == 'USGS/3DEP/1m'){
+        colProj = collIn.first().projection().atScale(1);}
+
+      //// Run image processing ////
+      collIn = collIn.map(function(img){
+        img = ee.Terrain.products(img); 
+        return img;
+        });
+      return collIn.mosaic().reproject(colProj);
+  } /// Helper function for LocalDEM
+  
+///// Simple Button functions ////
+function SelectDEM(){
+  //// Returns value of imported data for ElevUse
+  //// Called every time data is processed to insure 
+  //// that data is being pulled from correct dataset (needs to be global)
+  var selected = DEMSelect.getValue();
+  if (selected == 'Alos30'){ ElevUse = comb}
+  if (selected == 'Netherland5'){ ElevUse = Netherland5}
+  if (selected == 'Arctic2'){ ElevUse = Arctic2}
+  if (selected == 'Australia5'){ ElevUse = Australia5}
+  if (selected == 'Can23'){ ElevUse = Can23}
+  if (selected == 'SRTM30'){ ElevUse = SRTM30}
+  if (selected == 'USGS1'){ ElevUse = USGS1}
+  if (selected == 'USGS10'){ ElevUse = USGS10}
+} // Utility Button
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+////////  Map to export   ////////////////////////////////////////////
+//ExportMapBtn.onClick(function(){
+//  c = Map.getCenter();
+//  var roi = ee.Geometry(Map.getBounds(1));
+//  print(Map.layers());
+  
+//  var ExMap = ee.data.getTileUrl(ee.data.getMapId(), c.coordinates().get(0), c.coordinates().get(1), Map.getZoom());
+//  print(ExMap);
+
+//Export.map.toCloudStorage({
+  // All tiles that intersect the region get exported in their entirety.
+  // Clip the image to prevent low resolution tiles from appearing outside
+  // of the region.
+//  image: accessibilityBlended.clip(exportRegion),
+//  description: 'mapToCloudExample',
+//  bucket: 'your-bucket-name',
+//  maxZoom: Map.getZoom(),
+//  region: roi});/
+
+
