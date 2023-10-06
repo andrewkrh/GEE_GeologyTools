@@ -1,0 +1,973 @@
+/// Edited 2023/05/09 
+
+// Initiallize map
+var proj = ee.Projection('EPSG:4326');
+var proj2 = ee.Projection('EPSG:32644');
+var map = Map.setOptions('Satellite').setCenter(-10, 10, 3);
+var roi = ee.Geometry(Map.getBounds(1));
+var text = require('users/gena/packages:text');// Important tool for Labels Thanks Gena!!!
+
+///// Import Rasters Data /////
+var bathem = ee.Image('NOAA/NGDC/ETOPO1').select('bedrock');
+var Alos30 = ee.Image('JAXA/ALOS/AW3D30/V2_2').select('AVE_DSM');
+var Netherland5 = ee.Image('AHN/AHN2_05M_INT').select('elevation');
+var Australia5 = ee.Image('AU/GA/DEM_1SEC/v10/DEM-S').select('elevation');
+var SRTM30 = ee.Image('USGS/SRTMGL1_003').select('elevation');
+var Can23 = ee.ImageCollection('NRCan/CDEM').select('elevation');
+var Arctic2 = ee.Image('UMN/PGC/ArcticDEM/V3/2m_mosaic').select('elevation');
+var USGS1 = ee.ImageCollection('USGS/3DEP/1m').select('elevation');
+var USGS10 = ee.Image('USGS/3DEP/10m').select('elevation');
+
+//// Combine ALOS and NOAA to make global ee.Image
+var mask1 = bathem.lt(0);
+var mask2 = bathem.gt(0);
+var bathem1 = bathem.mask(mask1);
+var comb = Alos30.blend(bathem1);
+  
+var ElevUse = comb;
+
+
+/// Stored Visibility Variables ///////
+{
+var gamma = ['202020','white'];//// black to white////
+var bar = {palette: ['000000','0231b6','00a0ff',
+                     '99ccff','015c00', 'f8ff6b', 
+                     'ceb03f', '923f00', 'ffffff']};///Terrain palette////
+var empty = ee.Image().byte();
+var backgroundclr = '202020';
+var titleclr = '7FB5FF';///blue
+var txtclr = 'DDDDDD';///grey
+var btnclr = '000000';///black
+var resultclr = '#E84A8E';///red    
+var txtsize = '14px';
+var resultsize = '14px';
+var boxclr = 'ffffff'; ////white
+}
+ 
+//// Build Map Layer Containers (necesserry for updating map layers) ////
+var contourLayer = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var hs = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var ExtentLayer = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var hillshadeLocal = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var elevationLocal = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var contourLocal = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var SavePointLayer = ui.Map.Layer(empty, {}, 'Placeholder', false);
+var DEMExtent = ui.Map.Layer(empty, {}, 'Extent of Selected DEM', false);
+var lableLayer = ui.Map.Layer(empty,{}, 'Placeholder', false);
+
+/// Initiallize global utility variables ///////
+var RL = ee.Number(0);
+var RH = ee.Number(9000);
+var CI = ee.Number(50);
+var pointcount = 0;
+var multiPointCoordinates;
+var high = [];
+var StrikeDip = [];
+var UStrike = ee.Number(0);
+var UDip = ee.Number(0);
+var pID = 1;
+var table = ee.List([]);
+var ValidData = [];
+var TempString = [];
+var downloadUrl =[];
+var NewClip = ee.Image();
+var DEMbounds = ee.Image();
+var DEMquery = ee.Image();
+var eventCount = 0;
+
+
+//// Build string containers for use in panels (must be global) ///
+var errorLabel = ui.Label({value: '',  
+        style: {margin: '0px 0px 5px 0px', color: 'E63E6D', fontSize: txtsize,
+        whiteSpace: 'wrap', backgroundColor: backgroundclr}});
+var coordLabel = ui.Label({value: '',
+        style: {margin: '0px 0 0 10px', height: '80px', width: '330px',
+        whiteSpace: 'pre',color: backgroundclr, backgroundColor: boxclr,
+        textAlign: 'left', border:'10px solid white',position: 'top-left'}});
+var Results_SnD = ee.String('');
+var resultsLabel = ui.Label({value: '',
+        style:{margin: '0px 0 0 10px', height: '40px', width: '330px', 
+        color: backgroundclr, backgroundColor: boxclr,
+        textAlign: 'left', border:'10px solid white'}});
+var SavedPoints = ee.String('');
+var savedpointsLabel = ui.Label({value: '',
+        style: {margin: '0px 0 0 10px', whiteSpace: 'pre',
+        minHeight: '50px', width: '330px', color: backgroundclr, backgroundColor: boxclr,
+        textAlign: 'left', border:'10px solid white'}});
+  
+
+// Build GUI Button styles for use in Panel Widgets//////
+var Contour_chk = ui.Checkbox({
+  label: 'on/off',
+  value: false, 
+  onChange: function (){
+    var visb = Contour_chk.getValue();
+    contourLayer.setShown(visb);},
+  disabled: false,
+  style: {width: '100px', fontSize: txtsize, 
+    color: 'e8e8e8', backgroundColor: backgroundclr, margin: '0 0px 0px 10px'}
+});
+var Range_L = ui.Slider({
+  min:0,
+  max: 9000,
+  value: 0,
+  step: 25,
+  onChange: UpdateSlide,
+  style: {stretch: 'horizontal', 
+  width:'265px', height: '25px', border: '3px solid white',
+  margin: '2px 0px 0px 0px'},
+});
+var Range_H = ui.Slider({
+  min:0,
+  max: 9000,
+  value: 9000,
+  step: 25,
+  onChange: UpdateSlide,
+  style: {stretch: 'horizontal', 
+  width:'265px', height: '25px', border: '3px solid white',
+  margin: '2px 0px 0px 0px'},
+});
+var Interval = ui.Slider({
+  min:0,
+  max: 100,
+  value: 50,
+  step: 2,
+  onChange: UpdateSlide,
+  style: {stretch: 'horizontal', 
+  width:'265px', height: '25px', border: '3px solid white',
+  margin: '2px 0px 0px 0px'},
+});
+var Range_L_txt = ui.Textbox({
+  value: Range_L.getValue(),
+  onChange: UpdateTxt,
+  style: {width:'60px', height: '25px',
+  margin: '2px 0px 0px 5px'},
+});
+var Range_H_txt = ui.Textbox({
+  value: Range_H.getValue(),
+  onChange: UpdateTxt,
+  style: {width:'60px', height: '25px',
+  margin: '2px 0px 0px 5px'},
+});
+var Interval_txt = ui.Textbox({
+  value: Interval.getValue(),
+  onChange: UpdateTxt,
+  style: {width:'60px', height: '25px',
+  margin: '2px 0px 0px 5px'},
+});
+var LocalBtn = ui.Button({
+  label: 'RESET LOCAL DEM',
+  onClick: localClick,
+  style: {margin: '10px 0px 5px 10px', minWidth: '330px', 
+      backgroundColor: backgroundclr, border: '2px solid grey'}
+  }); 
+var CalcBtn = ui.Button({
+  label: 'CALCULATE',
+  style: {margin: '10px 10px 10px 10px', border: '2px solid grey'}
+  });  
+var SaveBtn = ui.Button({
+  label: 'SAVE',
+  style: {margin: '10px 10px 10px 10px', border: '2px solid grey'}
+  });
+var ResetBtn = ui.Button({
+  label: 'RESET',
+  style: {margin: '10px 10px 10px 10px', border: '2px solid grey'},
+  onClick: Reset
+  });
+var ExportBtn = ui.Button({
+  label: 'EXPORT CSV',
+  style: {margin: '10px 10px 10px 10px', border: '2px solid grey'}
+  });
+var DEMSelect = ui.Select({
+   items: [ {label:'ALOS DSM: Global 30m v3.2', value:'Alos30'}, 
+            {label:'AHN Netherlands 0.5m, Interpolated', value:'Netherland5'},
+            {label:'ArcticDEM 2m Mosaic',   value:'Arctic2'},
+            {label:'Australia Geoscience 5m',    value:'Australia5'},
+            {label:'Canadian NRCan 23m',    value:'Can23'},
+            {label:'SRTM Digital Elevation 30m',    value:'SRTM30'},
+            {label:'USGS 3DEP 1m National',    value:'USGS1'},
+            {label:'USGS 3DEP 10m National',    value:'USGS10'}],
+  value: 'Alos30',
+  onChange: function (){
+      GetExtent();
+      UpdateLocalDEM();},
+  style: {margin: '0px 0px 0px 10px', minWidth: '232px', border: '2px solid grey'}
+  });
+  
+  
+///// Build UI Panel and Widgets ////////
+var panel = ui.Panel({style: {width: '500px', backgroundColor: backgroundclr, position: 'bottom-left'}});
+{ui.root.insert(0,panel);
+panel.widgets().set(0,ui.Label(
+  'Plane Orientation Calculator', 
+  {fontWeight: 'bold', 
+  fontSize: '30px', 
+  color: titleclr, 
+  backgroundColor: backgroundclr}));
+panel.widgets().set(1,ui.Label(
+  'The Plane Orientation Calculator uses linear algebra to determine the orientation of a plane defined by three points. '+ 
+  'Navigate to a surface of interest, Click three points on the map, then click CALCULATE. ' +
+  'To use a DEM other than the ALOS Global 30m, select a dataset and click USE LOCAL DEM. ' +
+  'Results are displayed in azimuth using right-hand-rule notation. '+
+  'Saved results are placed in the location of the highest-elevation point of the three points selected. '+
+  'Cick SAVE and RESET after calculating an orientation, or click RESET to select new points. ',
+  {margin: '0 0px 10px 10px',
+  color: txtclr,
+  fontSize: txtsize, 
+  backgroundColor: backgroundclr}));
+panel.widgets().set(2,ui.Panel([ui.Label(
+    '50 m Elevation Contours',
+    {margin: '0 0px 0px 0px',
+    color: txtclr,
+    fontSize: txtsize, 
+    backgroundColor: backgroundclr}), Contour_chk],
+  ui.Panel.Layout.flow('horizontal'),
+    {margin: '0 0px 0px 10px', backgroundColor: backgroundclr}));
+panel.widgets().set(3,colorBar(bar.palette));
+panel.widgets().set(4,ui.Panel([ui.Label('Low', 
+  {margin: '0px 0px 10px 10px', fontSize: '11px', color: txtclr, backgroundColor: backgroundclr}),
+  ui.Label('High', 
+  {margin: '0 275px', fontSize: '11px', color: txtclr, backgroundColor: backgroundclr})], 
+  ui.Panel.Layout.flow('horizontal'),
+  {backgroundColor: backgroundclr}));
+panel.widgets().set(5,ui.Panel([ui.Label(
+      'DEM in use:',
+      {margin: '8px 0px 0px 0px',
+      color: txtclr,
+      fontSize: txtsize, 
+      backgroundColor: backgroundclr}), DEMSelect],
+  ui.Panel.Layout.flow('horizontal'),
+      {backgroundColor: backgroundclr, margin: '0px 5px 5px 10px'}));
+panel.widgets().set(6,ui.Panel([ui.Label({value:
+            'NOTE: Selecting a high-resolution DEM while using a wide field of view will '+
+            'cause performance problems. Zoom to the area of interest prior to selecting a local DEM. ',
+            style: {margin: '0px 0px 10px 0px',
+            color: txtclr,
+            fontSize: txtsize,
+            whiteSpace: 'wrap',
+            backgroundColor: backgroundclr}}),
+        ui.Label(
+      'Elevation Range Low (meters):',
+      {margin: '0px 0px 0px 0px',
+      color: txtclr,
+      fontSize: txtsize, 
+      backgroundColor: backgroundclr})],
+  ui.Panel.Layout.flow('vertical'),
+      {margin: '0px 0px 0px 10px', backgroundColor: backgroundclr, 
+      maxWidth: '330px', //minHeight: '170px'
+      }));
+
+panel.widgets().set(7,ui.Panel([Range_L, Range_L_txt],
+  ui.Panel.Layout.flow('horizontal'),
+      {backgroundColor: backgroundclr, margin: '0px 0px 0px 10px'}));
+panel.widgets().set(8,ui.Panel([ui.Label(
+      'Elevation Range High (meters):',
+      {margin: '0px 0px 0px 0px',
+      color: txtclr,
+      fontSize: txtsize, 
+      backgroundColor: backgroundclr})],
+  ui.Panel.Layout.flow('vertical'),
+      {backgroundColor: backgroundclr, margin: '0px 0px 0px 10px'}));
+panel.widgets().set(9,ui.Panel([Range_H, Range_H_txt],
+  ui.Panel.Layout.flow('horizontal'),
+      {backgroundColor: backgroundclr, margin: '0px 0px 0px 10px'}));
+panel.widgets().set(10,ui.Panel([ui.Label(
+      'Contour Interval (meters):',
+      {margin: '0px 0px 0px 0px',
+      color: txtclr,
+      fontSize: txtsize, 
+      backgroundColor: backgroundclr})],
+  ui.Panel.Layout.flow('vertical'),
+      {backgroundColor: backgroundclr, margin: '0px 0px 0px 10px'}));
+panel.widgets().set(11,ui.Panel([Interval, Interval_txt],
+  ui.Panel.Layout.flow('horizontal'),
+      {backgroundColor: backgroundclr, margin: '0px 0px 0px 10px'}));
+panel.widgets().set(12,LocalBtn);
+panel.widgets().set(13, ui.Panel([ui.Label({value:
+        'NOTE: Local DEM must be reselected with navigation to a new map area. ' + 
+        'Points selected outside the bounds of the Local Hilshade will not return a value.',
+        style: {margin: '0px 0px 0px 0px',
+        color: txtclr,
+        fontSize: txtsize,
+        whiteSpace: 'wrap',
+        backgroundColor: backgroundclr}}),
+      errorLabel],
+    ui.Panel.Layout.flow('vertical'),
+      {margin: '0px 0px 10px 10px', backgroundColor: backgroundclr, 
+      maxWidth: '330px', minHeight: '170px'}));     
+panel.widgets().set(14,ui.Panel([ui.Label({
+      value: 'Points - Lat, Lon',
+      style: {margin: '0px 0px 10px 10px', fontSize: resultsize, fontWeight: 'bold', 
+      color: resultclr, backgroundColor: backgroundclr}}),
+    coordLabel],
+  ui.Panel.Layout.flow('vertical'),{backgroundColor: backgroundclr}));
+panel.widgets().set(15,CalcBtn);
+panel.widgets().set(16,ui.Panel([ui.Label({
+      value: 'Results: Strike/Dip with uncertainties (azimuth, RHR)',
+      style: {margin: '0px 0px 10px 10px', fontSize: resultsize, fontWeight: 'bold', 
+      color: resultclr, backgroundColor: backgroundclr}}),
+    resultsLabel],
+  ui.Panel.Layout.flow('vertical'),{backgroundColor: backgroundclr}));
+panel.widgets().set(17,ui.Panel([SaveBtn, ResetBtn],
+  ui.Panel.Layout.flow('horizontal'),{backgroundColor: backgroundclr}));
+panel.widgets().set(18,ui.Panel([ui.Label({
+        value: 'Saved Points: PointID - (Strike / Dip)',
+        style: {margin: '0px 0px 10px 10px', fontSize: resultsize, fontWeight: 'bold', 
+        color: resultclr, backgroundColor: backgroundclr}}),
+    savedpointsLabel],
+  ui.Panel.Layout.flow('vertical'),{backgroundColor: backgroundclr}));
+panel.widgets().set(19,ui.Panel([ExportBtn],
+  ui.Panel.Layout.flow('horizontal'),{backgroundColor: backgroundclr}));
+panel.widgets().set(20,ui.Panel(ui.Label({
+    value: ' ',
+    style: {margin: '0px 0 0 10px', height: '50px',
+      color: '#0000FF', backgroundColor: '#202020',
+      fontSize: '14px', textDecoration: 'underline'},
+      targetUrl : downloadUrl
+    }),
+  ui.Panel.Layout.flow('horizontal'),{backgroundColor: backgroundclr}));
+}
+
+////// Build Map ////////
+/// Builds initial global layers of map using ALOS 30m DEM
+{ RL = ee.Number(Range_L.getValue());
+  RH = ee.Number(Range_H.getValue());
+  CI = ee.Number(Interval.getValue());  
+  
+  /// Build Contours
+  var linesA = ee.List.sequence(RL, RH, CI);
+  var contourlinesA = linesA.map(function(line) {
+  var mycontour = comb
+    .convolve(ee.Kernel.gaussian(5, 3))
+    .subtract(ee.Image.constant(line)).zeroCrossing() 
+    .multiply(ee.Image.constant(line)).toFloat();
+    
+  return mycontour.mask(mycontour);});
+  contourlinesA = ee.ImageCollection(contourlinesA).mosaic().int();
+  
+  var elevationVis = {
+    'min': 0,
+    'max': 8000,
+    'palette': ['015c00', 'f8ff6b', 'ceb03f', '923f00', 'ffffff'],
+    'opacity': 0.5,
+  };
+  var ContourVisA = {
+    'min': 0,
+    'max': 9000,
+    'palette': ['7FB5FF'],
+    'opacity': 0.5,
+  };
+  var hillshade = ee.Terrain.hillshade(comb);
+  hs = ui.Map.Layer(hillshade,{}, 'Global Hillshade', false);
+  contourLayer = ui.Map.Layer(contourlinesA, ContourVisA, 'Global 50 m Contours', false);
+  
+  GetExtent(); ///////For use in showing user extent of selected Local DEM
+  //DEMExtent = ui.Map.Layer(DEMbounds, {'min': 0, 'max': 1,
+ //   'palette': ['7FB5FF'], 'opacity': 0.5,},
+ //   'Extent of Selected DEM', false);
+  
+  Map.layers().set(0, hs);
+  Map.layers().set(1, ui.Map.Layer(comb.resample('bilinear').mask(mask2), elevationVis, 'Global Elevation', false));
+  Map.layers().set(2, ui.Map.Layer(comb.resample('bilinear').mask(mask1), {
+      min: -7000, max: 0, 
+      palette: ['000000','0231b6','00a0ff','99ccff'], 
+      opacity: 0.5}, 'Global Bathymetry', false));
+  Map.layers().set(3,contourLayer);  
+  Map.layers().set(4,hillshadeLocal);
+  Map.layers().set(5,contourLocal);
+  Map.layers().set(6,elevationLocal);
+  Map.layers().set(7,SavePointLayer); /// Needs to be built in order to hold place for points//
+  Map.layers().set(8,lableLayer);
+  Map.layers().set(9, DEMExtent);
+  }
+
+
+// Build Interactive/Automated functions /////
+// This functions get geometry layers change or view window changes.
+// Uses debounce to call the function at most every 3000/100 milliseconds.
+var LocalDEM = ui.util.debounce(function() { 
+  //// Builds local DEM in background with user navigation
+  //// Function is called automatically so that the 'Local DEM' is built and 
+  //// ready to display quickly when 'Reset Local DEM' button is clicked. 
+  
+  //// Execution is redirected to UpdateLocalDEM()
+  //// Wrapper functioin  is required to enable the use of Map.unlisten(Idle), 
+  //// which is rendered inoperable when LocalDEM() is called. 
+
+  UpdateLocalDEM();
+}, 3000);
+var editCoordinates = ui.util.debounce(function() {
+  var pointsEd = Map.drawingTools().layers().get(0).toGeometry();
+  var listEd = [];
+  if (pointcount == 1){ /// Deal with GEE initiallizing "Point" rather than "Multipoint"
+    listEd = ee.List([pointsEd.coordinates()]);
+    }else{
+    listEd = ee.List(pointsEd.coordinates());
+    }
+
+  var CoordStringB = listEd.map(function(n){
+    return ee.String('(')
+      .cat(ee.Number(ee.List(n).get(0)).format('%.4f')).cat(', ')
+      .cat(ee.Number(ee.List(n).get(1)).format('%.4f'))
+      .cat(')');//.cat('\r\n');
+    });
+  CoordStringB = CoordStringB.join('\r\n');
+  
+  coordLabel.setValue(CoordStringB.getInfo());
+
+  multiPointCoordinates = pointsEd.coordinates();
+},100);
+var getCoordinates = ui.util.debounce(function() {
+  var points = Map.drawingTools().layers().get(0).toGeometry();
+
+  var list = [];
+  if (pointcount === 0){ /// Deal with GEE initiallizing "Point" rather than "Multipoint"
+    list = ee.List([points.coordinates()]);
+    }else{
+    list = ee.List(points.coordinates());
+    }
+
+  var CoordString = list.map(function(n){
+    return ee.String('(')
+      .cat(ee.Number(ee.List(n).get(1)).format('%.4f')).cat(', ')
+      .cat(ee.Number(ee.List(n).get(0)).format('%.4f'))
+      .cat(')');//.cat('\r\n');
+    });
+  CoordString = CoordString.join('\r\n');
+
+  pointcount++;
+  if (pointcount > 2){Map.drawingTools().edit();}
+  if (pointcount > 3){Reset();}
+  
+  coordLabel.setValue(CoordString.getInfo());
+
+  multiPointCoordinates = points.coordinates();
+},100);
+var updateEventCount = ui.util.debounce(function() {
+  eventCount = 0;
+},2000);
+///// Initiallize Point Selection Tools//////////////
+// Don't make imports that correspond to the drawn points.
+var Idle = Map.onIdle(LocalDEM);
+Map.drawingTools().setLinked(false);
+// Limit the draw modes to points.
+Map.drawingTools().setDrawModes(['point']);
+// Add an empty layer to hold the drawn points.
+Map.drawingTools().addLayer([], 'Working Points', 'blue');
+// Set the geometry type to be point.
+Map.drawingTools().setShape('point');
+// Enter drawing mode.
+Map.drawingTools().draw();
+Map.drawingTools().onDraw(getCoordinates); /// Activates point selection//
+Map.drawingTools().onEdit(editCoordinates);
+Map.onChangeBounds(updateEventCount);
+
+//Map.add(loadingText);/// Not currently visible
+
+//// Main Ui Buttons Functions /////
+////////////////////////////////////
+CalcBtn.onClick(function(){
+  //// Convert points to feature so they can be sorted////
+  var fc = ee.FeatureCollection(multiPointCoordinates.map(function(p){
+    var point = ee.Feature(ee.Geometry.Point(p), {});
+    return point;
+  }));
+  //print(ElevUse, NewClip);
+  //DEMquery = NewClip.select('elevation');collection, reducer, scale, crs, crsTransform, tileScale
+  /// extract Elevation at points from DEM
+
+  var data = DEMquery.reduceRegions({collection: fc,
+                    reducer: ee.Reducer.first().setOutputs(['elevation']),
+                    scale: DEMquery.projection().nominalScale(), 
+                    crs: DEMquery.projection()});
+             
+  /// extract Elevation in region for uncertainties
+  var Bufferedfc = ee.FeatureCollection(multiPointCoordinates.map(function(p){
+    var point = ee.Feature(ee.Geometry.Point(p), {});
+    var buffer = ee.Number(DEMquery.projection().nominalScale()).multiply(1.5);
+    return point.buffer(buffer);}));
+  var dataMean = DEMquery.reduceRegions({collection: Bufferedfc,
+                    reducer: ee.Reducer.mean(),
+                    scale: DEMquery.projection().nominalScale(), 
+                    crs: DEMquery.projection(),});
+    
+  var dataStdDev = DEMquery.reduceRegions({collection: Bufferedfc,
+                    reducer: ee.Reducer.stdDev(),
+                    scale: DEMquery.projection().nominalScale(), 
+                    crs: DEMquery.projection(),});
+
+
+  ////// Aggrigate all  region queary results into one collection /////
+  {
+  // Use an equals filter to define how the collections match.
+  var filter = ee.Filter.equals({
+    leftField: 'system:index',
+    rightField: 'system:index', 
+  });
+  // Define the joins.
+  var MeanJoin = ee.Join.saveAll({
+  matchesKey: 'mean',
+  ascending: true
+});
+  var StdJoin = ee.Join.saveAll({
+  matchesKey: 'stdDev',
+  ascending: true
+});
+  // Apply the joins.
+  data = MeanJoin.apply(data, dataMean, filter);
+  data = StdJoin.apply(data, dataStdDev, filter);
+  // Convert Joined 'lists' to Properties.
+  data = data.map(function(mainFeature){
+      var MeanList = ee.List(mainFeature.get('mean'));
+      var StdList = ee.List(mainFeature.get('stdDev'));
+    return mainFeature.set({mean_value: ee.Feature(MeanList.get(0)).get('mean'),
+                          stdDev_value: ee.Feature(StdList.get(0)).get('stdDev')});
+    }); 
+  }
+
+  // Sum of tests; returns non zero if 0 elevatoin of null value exists.
+  ValidData =  ee.Number(ee.Algorithms.If((data.aggregate_array('elevation')).contains(0),1,0)).add(
+                ee.Number(ee.Algorithms.If((data.aggregate_array('elevation').size()).lt(3),1,0)));
+  TempString = ee.Algorithms.If(ValidData.eq(0), '',
+      'ERROR: Points select are outside the bounds of the selected DEM. '+
+      'Reload the DEM by clicking "Use Local DEM" or click "Reset" and select new points.');
+  
+  errorLabel.setValue(TempString.getInfo());
+
+  //// Do Calculation for S/D using Linear Algebra ////////////////////////
+  /// Sort points by elevation
+  var dsort = data.sort('elevation', false);
+  high = ee.Feature(dsort.toList(3).get(0));
+  var middle = ee.Feature(dsort.toList(3).get(1));
+  var low = ee.Feature(dsort.toList(3).get(2));
+
+  //// Determine distances between points. ////
+  //// Distance calculated from high-elevation point in the x and y directions independently ///
+      /// Make new point with middle-point x-axis position and high-point y-axis position ////
+  var temp_1 = ee.Feature(ee.Geometry.Point([
+      middle.geometry().coordinates().getNumber(0),
+      high.geometry().coordinates().getNumber(1)])); 
+  var My = (temp_1.distance(middle)); //delta to middle-point in meters on y axis
+  var Mx = (temp_1.distance(high)); //delta to middle-point in meters on x axis
+
+  /// Makes new point with low-point x-axis position and high-point y-axis position ////
+  temp_1 = ee.Feature(ee.Geometry.Point([
+      low.geometry().coordinates().getNumber(0),
+      high.geometry().coordinates().getNumber(1)])); /// low x pos high y pos
+  var Ly = (temp_1.distance(low)); //delta to low-point in meters on y axis
+  var Lx = (temp_1.distance(high)); //delta to low-point in meters on x axis
+
+  ///////////////////// consider making into a function ///////////////////////////////////
+  //// Correct for distance calculation results (make negative for W and S bearing) ///
+{  var LowXTest = ee.Number(low.geometry().coordinates().getNumber(0)).
+              gt(ee.Number(high.geometry().coordinates().getNumber(0)));  // 1 = True; bearing west L->H           
+  var LowYTest = ee.Number(low.geometry().coordinates().getNumber(1)).
+              gt(ee.Number(high.geometry().coordinates().getNumber(1)));  // 1 = True; bearing south L->H
+  
+  var MiddleXTest = ee.Number(middle.geometry().coordinates().getNumber(0)).
+              gt(ee.Number(high.geometry().coordinates().getNumber(0)));  // 1 = True; bearing west M->H           
+  var MiddleYTest = ee.Number(middle.geometry().coordinates().getNumber(1)).
+              gt(ee.Number(high.geometry().coordinates().getNumber(1)));  // 1 = True; bearing south M->H
+  
+  //// TestAdjust changes Test results to be either -1, or 1 (true,false) ////
+  //// Multiply distance calculation by results of bearing test to turn distances negative when necessary//////
+  Lx = Lx.multiply(TestAdjust(LowXTest));
+  Ly = Ly.multiply(TestAdjust(LowYTest));
+  Mx = Mx.multiply(TestAdjust(MiddleXTest));
+  My = My.multiply(TestAdjust(MiddleYTest));
+}
+
+  /// Build and execute Matrix math and return Geological numbers ////
+  StrikeDip = MatrixMath(Mx, My, Lx, Ly, 
+        high.getNumber('elevation'), 
+        middle.getNumber('elevation'), 
+        low.getNumber('elevation'));
+    
+  /// Determine uncerrtainties
+  /// Calculat new plane by moving Middle point - away and up; Low point - toward and down
+  var LowStrikeDip = MatrixMath(
+      ee.Number(Mx).multiply(1.05), 
+      ee.Number(My).multiply(1.05),
+      ee.Number(Lx).multiply(0.95),
+      ee.Number(Ly).multiply(0.95),
+      ee.Number(high.getNumber('elevation')),
+      ee.Number(middle.getNumber('elevation')).add(ee.Number(middle.getNumber('stdDev_value'))),
+      ee.Number(low.getNumber('elevation')).subtract(ee.Number(low.getNumber('stdDev_value')))
+      );
+      
+  /// Calculat new plane by moving Middle point - toward and down; Low point - away and up
+  var HighStrikeDip = MatrixMath(
+      ee.Number(Mx).multiply(0.95), 
+      ee.Number(My).multiply(0.95),
+      ee.Number(Lx).multiply(1.05),
+      ee.Number(Ly).multiply(1.05),
+      ee.Number(high.getNumber('elevation')),
+      ee.Number(middle.getNumber('elevation')).subtract(ee.Number(middle.getNumber('stdDev_value'))),
+      ee.Number(low.getNumber('elevation')).add(ee.Number(low.getNumber('stdDev_value')))
+      );
+  
+  //// Calculate difference in strike results via venctor solutioins
+  var strikeH = ee.Number(HighStrikeDip.get(0)).multiply(Math.PI/180);
+  var strikeL = ee.Number(LowStrikeDip.get(0)).multiply(Math.PI/180);
+  var HArray = ee.Array([strikeH.cos(), strikeH.sin()]);
+  var LArray = ee.Array([strikeL.cos(), strikeL.sin()]);
+            
+  UStrike = HArray.dotProduct(LArray).divide(1).acos().multiply(180/Math.PI);
+  UDip = ee.Number(LowStrikeDip.get(1)).subtract(ee.Number(HighStrikeDip.get(1))).abs();
+   
+  var string3 = ee.String('(')
+        .cat(ee.Number(StrikeDip.get(0)).format('%.1f'))
+        .cat(' / ')
+        .cat(ee.Number(StrikeDip.get(1)).format('%.1f'))
+        .cat(')');
+  var UncertaintyString = ee.String('(')
+        .cat(ee.Number(UStrike).format('%.1f'))
+        .cat(' / ')
+        .cat(ee.Number(UDip.format('%.1f')))
+        .cat(')');
+  Results_SnD = ee.String(string3.cat(' +/- ').cat(UncertaintyString));
+  
+  resultsLabel.setValue(Results_SnD.getInfo());
+});
+///// Save Points to List  ////////
+SaveBtn.onClick(function() {
+  var table1 = ee.List([ee.Feature(ee.Geometry.Point(
+    high.geometry().coordinates()),
+      {"PointID": pID,
+      "Latitude": high.geometry().coordinates().getNumber(1),
+      "Longitude": high.geometry().coordinates().getNumber(0),
+      "Elevation": high.getNumber('elevation'),
+      "Strike": ee.Number(StrikeDip.get(0)).format('%.1f'),
+      "Dip": ee.Number(StrikeDip.get(1)).format('%.1f'),
+      "Strike Uncertainty": UStrike.format('%.1f'),
+      "Dip Uncertainty": UDip.format('%.1f')}
+      )]);
+    
+    var DTableString = ee.String(ee.Number(pID).format('%02d')).cat(' - ')
+        .cat(Results_SnD);
+    
+    if (pID < 2){
+      table = table1;
+      SavedPoints  = ee.String(DTableString);
+    }
+    if (pID >= 2){
+      table = table.cat(table1);
+      SavedPoints  = ee.String(SavedPoints).cat('\r\n').cat(DTableString);
+      }    
+    
+    savedpointsLabel.setValue(SavedPoints.getInfo());
+    
+  /////// Add Saved Data Points to Map /////
+    
+  ///////////////////////////////////////// FIX THIS VIS PARAM to something appealing or something with S/D /////////////////////////////
+    var SavedPointFeatures = ee.FeatureCollection(table).style(
+    {color: 'black', fillColor: titleclr, pointSize: 8, pointShape: 'o' });
+  
+      if (pID < 2){
+        SavePointLayer = ui.Map.Layer(SavedPointFeatures, {}, 'Saved Points (ID - S / D)');
+        }
+      if (pID >= 2){
+  //      tools.map.removeLayerByName('Saved Points (ID - S / D)', map);
+        SavePointLayer = ui.Map.Layer(SavedPointFeatures, {}, 'Saved Points (ID - S / D)');
+      }
+
+    //// Build Point Labels with package from Gennadii Donchyts
+    // scale text font relative to the current map scale
+    var scale = Map.getScale() * 1.5;
+
+    var geometry = ee.FeatureCollection(table);
+    var labels = geometry.map(function(feat) {
+      feat = ee.Feature(feat);
+      var name = ee.String(feat.get("Strike")).cat(' / ').cat(feat.get("Dip"));
+      var centroid = feat.geometry().centroid();
+      var t = text.draw(name, centroid, scale, {
+        fontSize:18, 
+        textColor: titleclr,
+        outlineWidth: 1,
+        outlineColor: 'black'
+        });
+        return t;
+        });
+
+  labels = ee.ImageCollection(labels);
+  lableLayer = ui.Map.Layer(labels,{}, 'Labels', true);
+    
+  Map.layers().set(7, SavePointLayer);
+  Map.layers().set(8, lableLayer);
+    
+  pID = pID+1;
+  Reset();
+  });
+///// Reset Working Points (differnt format because function is also called by SaveBtn) ///////
+function Reset(){
+  multiPointCoordinates = [];
+  coordLabel.setValue('');
+  resultsLabel.setValue('');
+  errorLabel.setValue('');
+  pointcount=0;
+
+  Map.drawingTools().clear();
+  // Don't make imports that correspond to the drawn points.
+  Map.drawingTools().setLinked(false);
+  // Limit the draw modes to points.
+  Map.drawingTools().setDrawModes(['point']);
+  // Add an empty layer to hold the drawn points.
+  Map.drawingTools().addLayer([], 'Working Points', 'blue');
+  // Set the geometry type to be point.
+  Map.drawingTools().setShape('point');
+  // Enter drawing mode.
+  Map.drawingTools().draw();
+
+  // Restart Selection function (line 204)///
+  Map.drawingTools().onDraw(getCoordinates);
+  Map.drawingTools().onEdit(editCoordinates);
+}
+/////  Build CSV   /////////
+ExportBtn.onClick(function(){
+  //// Wrap the Feature in a FeatureCollection for export.
+  var ExportTable = ee.FeatureCollection(table);
+
+  downloadUrl = ExportTable.getDownloadURL({
+    format: 'CSV',
+    filename: 'PlaneOrientation_SavedPoints'});
+  
+ panel.widgets().set(20,ui.Panel(
+    ui.Label({value: 'download',style: {
+        margin: '0px 0 0 10px', height: '50px',
+        color: '#0000FF', backgroundColor: '#202020',
+        fontSize: '20px', textDecoration: 'underline'},
+        targetUrl : downloadUrl}),
+    ui.Panel.Layout.flow('horizontal'),{backgroundColor: backgroundclr}));
+});
+
+////// Other complicated button functions/////
+function localClick(){
+  //// Initiates on 'Reset Local DEM'
+  //// Makes hillshade constructed by LocalDEM() or UpdateLocalDEM() visible
+    if (eventCount === 0) {
+      UpdateLocalDEM()} else{}
+    GetExtent();
+
+    ValidData = validDEM(DEMbounds);/// returns 5 if valid
+    TempString = ee.Algorithms.If(ValidData.eq(5), "",
+      "ERROR: Selected DEM does not contain data at location. Reselet DEM or navigate to new location");
+    errorLabel.setValue(TempString.getInfo());
+
+    hillshadeLocal.setName('Local Hillshade').setShown(true);
+    elevationLocal.setName('Local Elevation').setShown(false);
+    contourLocal.setName('Local Contours').setShown(false);
+    DEMExtent.setName('Extent of Selected DEM').setShown(false);
+    
+    Map.unlisten(Idle); /// turn off LocalDEM() automatic function
+    eventCount = 1;
+  } /// Process button
+function GetExtent(){
+  //// Called with change in DEM select dropdown menu. 
+  //// Builds an ee.Image that shows extent of the DEM selected.
+  //// Used with validDEM() to create error message if outside bounds of DEM.
+  //// Could be displayed to help UEx (is computationally intensive)
+  SelectDEM();
+  var ElevSelected = ElevUse;
+  var condition = ee.Algorithms.If(ee.Algorithms.IsEqual(ee.Algorithms.ObjectType(Can23),
+              ee.Algorithms.ObjectType(ElevUse)), 0, 1);
+  if (condition.getInfo() === 0){ //// ElevUse is a Collection///
+      ElevSelected = ElevUse.mosaic();
+      //ElevSelected = ElevSelected.resample('bilinear');
+  }
+  
+  DEMbounds = ElevSelected.unmask(-5).neq(-5);
+  DEMbounds = DEMbounds.selfMask();
+  } //// Process Button
+
+ /// Process function
+function MatrixMath(Mx, My, Lx, Ly, H, M, L){
+  /// Does Matrix calculation based on 
+  /// https://serc.carleton.edu/quantskills/activities/three_point.html
+  /// Take input vectors, calculates slope in x and y directions, and 
+  /// returns strike and dip.
+  /// Mx = Distance, in x-direction, to Middle-elevation point from High-elevation point 
+  /// My = Distance in y-direction
+  /// Lx = Distance, in x-direction, to Low-elevation point from High-elevation point 
+  /// Ly = Distance in y-direction
+  /// H = Elevation of High point; M = elevation midpoint; L = elevation lowpoint
+  var AMatrix = ee.Array([[0, 0, 1], [Mx, My, 1], [Lx, Ly, 1]]);
+  var ZMatrix = ee.Array([[H], [M], [L]]);
+  var Mult = AMatrix.matrixSolve(ZMatrix);    //var Inv = AMatrix.matrixInverse();
+
+  var Sx = ee.Number(Mult.get([0,0])); // slope in x-direction (as a ratio)
+  var Sy = ee.Number(Mult.get([1,0])); // slope in y-direction 
+  
+  var dp = Sx.multiply(Sx).add(Sy.multiply(Sy)).sqrt(); // total slope in ratio
+  dp = dp.atan().multiply(180/Math.PI); // in degrees
+  var dipDir = Sx.atan2(Sy).multiply(180/Math.PI); // dip direction in degrees from East (-/+, S/N)
+  var strk = (dipDir.subtract(90).multiply(-1)).add(630).mod(360); /// convert from East origin into Righ-hand-rule
+
+return ee.List([strk, dp]);
+} ////Process function
+function UpdateLocalDEM(){ 
+    //// Builds local DEM 
+    //// Called through LocalDEM() wrapper function, and with
+    //// GetExtent() so DEM is ready for user.
+    //// Called within localClick() function if a local DEM already exists.
+
+    SelectDEM();
+    var condition = ee.Algorithms.If(ee.Algorithms.IsEqual(ee.Algorithms.ObjectType(Can23),
+                ee.Algorithms.ObjectType(ElevUse)), 0, 1);
+    if (condition.getInfo() === 0){ //// ElevUse is a Collection///
+      NewClip = manageCollection(ElevUse);
+      } else {
+        NewClip = ee.Terrain.products(ElevUse);
+        }
+  
+    NewClip = NewClip.rename(
+      ['elevation', 'slope', 'aspect', 'hillshade']);
+    DEMquery = NewClip.select('elevation');
+    
+    RL = ee.Number(Range_L.getValue());
+    RH = ee.Number(Range_H.getValue());
+    CI = ee.Number(Interval.getValue()); 
+    
+    /// Build Contours
+    var linesB = ee.List.sequence(RL, RH, CI);
+    var contourlinesB = linesB.map(function(lineB) {
+    var mycontourB = NewClip.select('elevation')
+      .convolve(ee.Kernel.gaussian(2, 1, 'meters'))
+      .subtract(ee.Image.constant(lineB)).zeroCrossing() 
+      .multiply(ee.Image.constant(lineB)).toInt();
+    
+    return mycontourB.mask(mycontourB);});
+    contourlinesB = ee.ImageCollection(contourlinesB).mosaic().int();
+    
+    
+    //// Build Map Layers ///////
+    var elevationVisLocal = {
+      'min': RL.getInfo(),
+      'max': RH.getInfo(),
+      'palette': ['015c00', 'f8ff6b', 'ceb03f', '923f00', 'ffffff'],
+      'opacity': 0.5,
+      };
+    var ContourVisLocal = {
+      'min': RL.getInfo(),
+      'max': RH.getInfo(),
+      'palette': ['7FB5FF'],
+      'opacity': 0.5,
+      };
+    
+    hillshadeLocal = ui.Map.Layer(NewClip.select('hillshade'),{}, 'Placeholder', false);
+    elevationLocal = ui.Map.Layer(NewClip.select('elevation').resample('bilinear'), elevationVisLocal, 'Placeholder', false);
+    contourLocal = ui.Map.Layer(contourlinesB, ContourVisLocal, 'Placeholder', false);
+    DEMExtent = ui.Map.Layer(DEMbounds, {'min': 0, 'max': 1,
+            'palette': ['7FB5FF'], 'opacity': 0.5,},
+            'Extent of Selected DEM', false);
+
+
+    Map.layers().set(4, hillshadeLocal);
+    Map.layers().set(5, elevationLocal);
+    Map.layers().set(6, contourLocal);
+    Map.layers().set(9, DEMExtent);
+    eventCount = 0;
+  } /// Process function
+function validDEM(DEMTest){
+    //// Validates that user selected DEM has data within viewing window.
+    /// Returns '5' if DEM is valid
+    /// If bands exist, calculates number of pixels within window; >1 = valid
+    
+    var numberBands = DEMTest.bandNames().size();
+    var valid = [];
+    if (numberBands.getInfo() === 0){ valid = ee.Number(0);}
+    else{
+        var testRegion = ee.Geometry(Map.getBounds(1));
+        DEMTest = DEMTest.clip(testRegion);
+        
+        var dummyImg = ee.Image(1).clip(testRegion).rename('Region');
+        var nPixels = DEMTest
+                   .multiply(dummyImg)
+                   .reduce(ee.Reducer.count())
+                   .rename('nPixels').selfMask();
+        var stats = nPixels.reduceRegion({
+              reducer: ee.Reducer.sum(), 
+              geometry: testRegion,
+              bestEffort: true,
+              scale: 1000,}); 
+        valid = ee.Number(ee.Algorithms.If((stats.getNumber('nPixels')).gt(1),5,0));
+        }
+        
+    return valid;    /// Returns '5' if DEM is valid
+  } /// Process function
+function manageCollection(collIn){
+      //// Filter the collection
+      roi = ee.Geometry(Map.getBounds(1));
+      var buf = ee.Number(Map.getScale()).multiply(500);
+      var filterBounds = roi.buffer(buf);
+      collIn = collIn.filterBounds(filterBounds);
+      var colProj = [];
+      //print(collIn.get('system:id'))
+      var collName = collIn.get('system:id');
+      if (collName.getInfo() == 'NRCan/CDEM'){
+        colProj = collIn.first().projection().atScale(23);}
+      else if (collName.getInfo() == 'USGS/3DEP/1m'){
+        colProj = collIn.first().projection().atScale(1);}
+      
+
+      //// Run image processing ////
+      collIn = collIn.map(function(img){
+        img = ee.Terrain.products(img); 
+        return img;
+        });
+      return collIn.mosaic().reproject(colProj);
+  }
+  
+///// Simple Button functions ////
+function SelectDEM(){
+  //// Returns value of imported data for ElevUse
+  //// Called every time data is processed to insure 
+  //// that data is being pulled from correct dataset (needs to be global)
+  var selected = DEMSelect.getValue();
+  if (selected == 'Alos30'){ ElevUse = comb}
+  if (selected == 'Netherland5'){ ElevUse = Netherland5}
+  if (selected == 'Arctic2'){ ElevUse = Arctic2}
+  if (selected == 'Australia5'){ ElevUse = Australia5}
+  if (selected == 'Can23'){ ElevUse = Can23}
+  if (selected == 'SRTM30'){ ElevUse = SRTM30}
+  if (selected == 'USGS1'){ ElevUse = USGS1}
+  if (selected == 'USGS10'){ ElevUse = USGS10}
+} // Utility Button
+function UpdateTxt(){
+  //// Called on change to Elevation Range text
+  //// Changes Elevation Range text and Slider symultaniously
+  Range_L.setValue(Range_L_txt.getValue());
+  Range_H.setValue(Range_H_txt.getValue());
+  Interval.setValue(Interval_txt.getValue());
+  UpdateSlide();
+} /// Utility Button
+function UpdateSlide(){
+  //// Called on change to Elevation Range slider
+  //// Changes Elevation Range text and Slider symultaniously
+  Range_L_txt.setValue(Range_L.getValue());
+  Range_H_txt.setValue(Range_H.getValue());
+  Interval_txt.setValue(Interval.getValue());
+  
+  RL = ee.Number(Range_L.getValue());
+  RH = ee.Number(Range_H.getValue());
+  CI = ee.Number(Interval.getValue());  
+  
+  ValidData = ee.Number(RL).lt(ee.Number(RH)); //// Returns 1 elevation range is valid
+  TempString = ee.Algorithms.If(ValidData.eq(1), " ",
+      "ERROR: Elevation Range Low must be greater that High");    
+  errorLabel.setValue(TempString.getInfo());
+} /// Utility Button
+
+//// Basic functions
+function TestAdjust(number){
+  //// Adjust test results (1 or 0) to be either -1 or 0 ////
+  return number.subtract(number.multiply(3)).add(1);} /// Utility function
+function colorBar(palette) {return ui.Thumbnail({image: ee.Image.pixelLonLat().select(0), 
+          params: {bbox: [0, 0, 1, 0.1], 
+          dimensions: '330x15', 
+          format: 'png', 
+          palette: palette},
+          style: {margin: '0px 0px 3px 10px', 
+          backgroundColor: '00000000'},});} /// Utility function
+
+
+
